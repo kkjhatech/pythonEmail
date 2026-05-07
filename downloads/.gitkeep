@@ -1,0 +1,2 @@
+# This file ensures the downloads folder is tracked by git
+# Actual downloaded files will be ignored by .gitignore
