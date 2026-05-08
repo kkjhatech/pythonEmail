@@ -17,6 +17,9 @@ class Settings:
     email_use_ssl: bool
     email_provider: str  # 'gmail' or 'outlook'
     
+    # Outlook-specific: 'imap' for IMAP connection, 'com' for Outlook COM automation
+    outlook_connection_method: str
+    
     # Mailbox Configuration
     email_inbox_folder: str
     email_processed_folder: str
@@ -57,6 +60,9 @@ class Settings:
             email_username=os.getenv('EMAIL_USERNAME', ''),
             email_password=os.getenv('EMAIL_PASSWORD', ''),
             email_use_ssl=os.getenv('EMAIL_USE_SSL', 'true').lower() == 'true',
+            
+            # Outlook connection method: 'imap' or 'com'
+            outlook_connection_method=os.getenv('OUTLOOK_CONNECTION_METHOD', 'imap').lower(),
             
             # Mailbox
             email_inbox_folder=os.getenv('EMAIL_INBOX_FOLDER', 'INBOX'),

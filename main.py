@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import Settings
-from services import EmailService, ExcelService, SchedulerService
+from services import EmailService, ExcelService, SchedulerService, OutlookCOMAutoService
 from database import DatabaseManager
 from utils import get_logger, ExcelValidator
 
@@ -31,6 +31,26 @@ class EmailAutomation:
             'errors': 0
         }
     
+    def _get_email_service(self):
+        """Get appropriate email service based on provider and connection method."""
+        provider = self.settings.email_provider
+        
+        if provider == 'gmail':
+            self.logger.info("Using Gmail IMAP service")
+            return EmailService(self.settings)
+        
+        elif provider in ['outlook', 'office365']:
+            if self.settings.outlook_connection_method == 'com':
+                self.logger.info("Using Outlook COM automation (requires Outlook desktop app)")
+                return OutlookCOMAutoService(self.settings)
+            else:
+                self.logger.info("Using Outlook IMAP service")
+                return EmailService(self.settings)
+        
+        else:
+            self.logger.info(f"Using default IMAP service for {provider}")
+            return EmailService(self.settings)
+    
     def run(self):
         """Run the automation once."""
         self.logger.info("=" * 60)
@@ -38,7 +58,7 @@ class EmailAutomation:
         self.logger.info("=" * 60)
         
         try:
-            with EmailService(self.settings) as email_service:
+            with self._get_email_service() as email_service:
                 # Fetch unread emails
                 emails = email_service.fetch_unread_emails(
                     since_days=self.settings.date_filter_days
