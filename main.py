@@ -216,7 +216,8 @@ class EmailAutomation:
                 success, rows, message = db.insert_dataframe(
                     prepared_df,
                     prefixed_table_name,
-                    sender
+                    sender,
+                    email_details_a
                 )
                 
                 if success:

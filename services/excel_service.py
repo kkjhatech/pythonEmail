@@ -201,12 +201,13 @@ class ExcelService:
         columns.append("    id INT IDENTITY(1,1) PRIMARY KEY")
         
         # Add tracking columns only for non-prefixed tables
-        # For prefixed tables (PY_1_2_...), don't include sender_email
+        # For prefixed tables (PY_1_2_...), add Email_Details_A for join purposes
         if include_email_id and not (email_master_a and email_details_a):
             columns.append("    sender_email NVARCHAR(255)")
             columns.append("    processed_date DATETIME DEFAULT GETDATE()")
         elif include_email_id and (email_master_a and email_details_a):
-            # For prefixed tables, only add processed_date
+            # For prefixed tables, add Email_Details_A for join and processed_date
+            columns.append(f"    [Email_Details_A] INT")
             columns.append("    processed_date DATETIME DEFAULT GETDATE()")
         
         # Add data columns

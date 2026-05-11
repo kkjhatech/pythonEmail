@@ -140,6 +140,7 @@ class DatabaseManager:
         df: pd.DataFrame,
         table_name: str,
         sender_email: Optional[str] = None,
+        email_details_a: Optional[int] = None,
         batch_size: int = 1000
     ) -> Tuple[bool, int, str]:
         """
@@ -149,6 +150,7 @@ class DatabaseManager:
             df: DataFrame to insert
             table_name: Target table name
             sender_email: Sender email to include
+            email_details_a: Email_Details_A ID for prefixed tables
             batch_size: Number of rows to insert at once
             
         Returns:
@@ -158,14 +160,17 @@ class DatabaseManager:
             with self.connection.cursor() as cursor:
                 # Get table columns
                 table_columns = self.get_table_columns(table_name)
-                self.logger.info(f"Table columns: {table_columns}")
-                self.logger.info(f"DataFrame columns: {list(df.columns)}")
                 
                 # Check if this is a prefixed table (starts with PY_ followed by numbers)
                 is_prefixed_table = table_name.startswith("PY_") and "_" in table_name[3:]
                 
-                # Add sender_email column only if table has it and it's not a prefixed table
-                if 'sender_email' in table_columns and sender_email and not is_prefixed_table:
+                # Add columns based on table type
+                if is_prefixed_table and email_details_a and 'Email_Details_A' in table_columns:
+                    # For prefixed tables, add Email_Details_A column
+                    df = df.copy()
+                    df['Email_Details_A'] = email_details_a
+                elif 'sender_email' in table_columns and sender_email and not is_prefixed_table:
+                    # For regular tables, add sender_email column
                     df = df.copy()
                     df['sender_email'] = sender_email
                 
@@ -178,8 +183,6 @@ class DatabaseManager:
                             columns.append(col)
                         else:
                             columns.append(f"[{col}]")
-                
-                self.logger.info(f"Matched columns for insert: {columns}")
                 
                 if not columns:
                     return False, 0, "No matching columns found"
@@ -343,12 +346,32 @@ class DatabaseManager:
         try:
             cursor = self.connection.cursor()
             
-            # Insert email details using stored procedure
+            # Validate required parameters
+            if not subject:
+                subject = "No Subject"
+            if not sheet_name:
+                sheet_name = "Sheet1"
+            if total_rows is None or total_rows <= 0:
+                total_rows = 0
+            if received_date is None:
+                received_date = datetime.now()
+            
+            # Insert email details - try stored procedure first, then direct SQL
             self.logger.info(f"Inserting email details for Email_Master_A {email_master_a}")
-            cursor.execute(
-                "EXEC usp_insert_email_details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
-                (email_master_a, subject, sheet_name, total_rows, received_date)
-            )
+            
+            try:
+                # Try stored procedure first
+                cursor.execute(
+                    "EXEC usp_insert_email_details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
+                    (email_master_a, subject, sheet_name, total_rows, received_date)
+                )
+            except Exception as proc_error:
+                self.logger.warning(f"Stored procedure failed: {proc_error}. Trying direct SQL insert.")
+                # Fallback to direct SQL
+                cursor.execute(
+                    "INSERT INTO Email_Details (EmailID_N, Subject_Name, SheetName, TotalRows, ReceivedDate) VALUES (?, ?, ?, ?, ?)",
+                    (email_master_a, subject, sheet_name, total_rows, received_date)
+                )
             
             # Get the inserted ID - try multiple methods
             try:
