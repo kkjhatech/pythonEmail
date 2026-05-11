@@ -42,9 +42,9 @@ class ExcelService:
             extension = path.suffix.lower()
             
             if extension == '.csv':
-                df = pd.read_csv(file_path)
+                df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
             elif extension in ['.xlsx', '.xls']:
-                result = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+                result = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, dtype=str, keep_default_na=False)
                 # Handle multi-sheet files - returns dict instead of DataFrame
                 if isinstance(result, dict):
                     if not result:
@@ -146,6 +146,9 @@ class ExcelService:
             
             sql_types[col] = type_mapping.get(dtype, 'NVARCHAR(500)')
         
+        # DEBUG: Log SQL types
+        self.logger.info(f"SQL types inferred: {sql_types}")
+        
         return sql_types
     
     def _is_datetime_column(self, series: pd.Series) -> bool:
@@ -160,49 +163,72 @@ class ExcelService:
         self,
         table_name: str,
         df: pd.DataFrame,
-        include_id: bool = True,
+        email_master_a: int = None,
+        email_details_a: int = None,
         include_email_id: bool = True
     ) -> str:
         """
-        Generate CREATE TABLE SQL statement.
+        Generate CREATE TABLE SQL statement based on DataFrame columns.
         
         Args:
-            table_name: Name of the table
-            df: DataFrame to base schema on
-            include_id: Whether to include auto-increment ID column
-            include_email_id: Whether to include email_id tracking column
-        
+            table_name: Name for the new table
+            df: DataFrame to analyze
+            email_master_a: Email_Master_A ID for prefix
+            email_details_a: Email_Details_A ID for prefix
+            include_email_id: Whether to add email_id tracking column
+            
         Returns:
-            SQL CREATE TABLE statement
+            CREATE TABLE SQL statement
         """
-        columns = []
-        
-        if include_id:
-            columns.append("    id INT IDENTITY(1,1) PRIMARY KEY")
-        
-        if include_email_id:
-            columns.append("    email_id NVARCHAR(255)")
-            columns.append("    processed_date DATETIME DEFAULT GETDATE()")
-        
+        # Infer SQL types
         sql_types = self.infer_sql_types(df)
         
+        # Build table name with prefix if IDs provided
+        if email_master_a and email_details_a:
+            # Extract filename from table_name
+            filename = table_name
+            if '.' in filename:
+                filename = filename.split('.')[0]
+            # Create prefixed table name with just numeric values
+            prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{filename}"
+        else:
+            prefixed_table_name = table_name
+        
+        # Build column definitions
+        columns = []
+        
+        # Add ID column
+        columns.append("    id INT IDENTITY(1,1) PRIMARY KEY")
+        
+        # Add tracking columns only for non-prefixed tables
+        # For prefixed tables (PY_1_2_...), don't include sender_email
+        if include_email_id and not (email_master_a and email_details_a):
+            columns.append("    sender_email NVARCHAR(255)")
+            columns.append("    processed_date DATETIME DEFAULT GETDATE()")
+        elif include_email_id and (email_master_a and email_details_a):
+            # For prefixed tables, only add processed_date
+            columns.append("    processed_date DATETIME DEFAULT GETDATE()")
+        
+        # Add data columns
         for col in df.columns:
             sql_type = sql_types.get(col, 'NVARCHAR(500)')
             # Sanitize column name for SQL
-            safe_col = str(col).replace(' ', '_').replace('-', '_')
+            safe_col = str(col).strip().replace(' ', '_').replace('-', '_')
+            safe_col = safe_col.rstrip('_')  # Remove trailing underscores
             if safe_col[0].isdigit():
                 safe_col = f"col_{safe_col}"
             # Wrap in brackets to handle reserved keywords (e.g., 'Add', 'Select', etc.)
-            safe_col = f"[{safe_col}]"
+            # But don't double-wrap if already has brackets
+            if not safe_col.startswith('[') and not safe_col.endswith(']'):
+                safe_col = f"[{safe_col}]"
             columns.append(f"    {safe_col} {sql_type}")
         
-        columns_str = ',\n'.join(columns)
-        
-        sql = f"""CREATE TABLE {table_name} (
-{columns_str}
+        # Build CREATE TABLE statement
+        create_sql = f"""CREATE TABLE {prefixed_table_name} (
+{',\n'.join(columns)}
 );"""
         
-        return sql
+        return create_sql
     
     def create_data_preview(
         self,

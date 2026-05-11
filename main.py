@@ -6,7 +6,8 @@ Main entry point for email processing automation.
 import sys
 import signal
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 
 from config import Settings
 from services import EmailService, ExcelService, SchedulerService, OutlookCOMAutoService
@@ -120,7 +121,7 @@ class EmailAutomation:
             
             if file_path:
                 self.stats['files_downloaded'] += 1
-                self._process_excel_file(file_path, email_id)
+                self._process_excel_file(file_path, email_data, sender)
                 files_processed += 1
         
         # Post-process email
@@ -130,7 +131,7 @@ class EmailAutomation:
         else:
             self._post_process_email(email_service, email_data, processed=False)
     
-    def _process_excel_file(self, file_path: str, email_id: str):
+    def _process_excel_file(self, file_path: str, email_data: Dict[str, Any], sender: str):
         """Process a downloaded Excel file."""
         self.logger.info(f"Processing Excel file: {file_path}")
         
@@ -142,58 +143,89 @@ class EmailAutomation:
                 self.logger.error(f"Failed to read file: {file_path}")
                 return
             
-            # Log preview
-            preview = self.excel_service.create_data_preview(df)
-            self.logger.info(f"File preview: {preview['total_rows']} rows, columns: {preview['columns']}")
-            
             # Get table name from filename
-            table_name = self._generate_table_name(file_path)
+            table_name = Path(file_path).stem
             
-            # Connect to database and insert
+            # Validate and prepare data
+            is_valid, prepared_df, message = self.excel_service.validate_and_prepare(
+                df,
+                table_name
+            )
+            
+            if not is_valid:
+                self.logger.error(f"Data validation failed: {message}")
+                return
+            
+            # DEBUG: Check prepared data
+            self.logger.info(f"Prepared data dtypes:\n{prepared_df.dtypes}")
+            self.logger.info(f"Prepared data first row:\n{prepared_df.iloc[0].to_dict()}")
+            
+            # Insert into database with new structure
             with DatabaseManager(self.settings) as db:
-                if not db.test_connection():
-                    self.logger.error("Database connection failed")
+                # Step 1: Insert into Email_Master table using sender email
+                sender_email = email_data.get('sender_email', '')
+                if not sender_email:
+                    # Extract email from sender string if sender_email is not available
+                    sender_str = email_data.get('sender', '')
+                    if '<' in sender_str and '>' in sender_str:
+                        sender_email = sender_str.split('<')[1].split('>')[0].lower()
+                    else:
+                        sender_email = sender_str.lower()
+                
+                self.logger.info(f"DEBUG: email_data keys: {list(email_data.keys())}")
+                self.logger.info(f"DEBUG: sender_email being inserted: '{sender_email}'")
+                success, email_master_a, msg = db.insert_email_master(sender_email, "System")
+                
+                if not success:
+                    self.logger.error(f"Failed to insert into Email_Master: {msg}")
+                    self.stats['errors'] += 1
                     return
                 
-                # Create table if it doesn't exist
-                if not db.table_exists(table_name):
-                    self.logger.info(f"Table {table_name} doesn't exist, creating...")
-                    create_sql = self.excel_service.generate_create_table_sql(
-                        table_name,
-                        df,
-                        include_id=True,
-                        include_email_id=True
-                    )
-                    
-                    if not db.create_table(create_sql):
-                        self.logger.error("Failed to create table")
-                        return
+                # Step 2: Insert into Email_Details table
+                subject = email_data.get('subject', '')
+                sheet_name = 'Sheet1'  # Default, could be enhanced to detect actual sheet name
+                total_rows = len(prepared_df)
+                received_date = email_data.get('date', datetime.now())
                 
-                # Validate and prepare data
-                is_valid, prepared_df, message = self.excel_service.validate_and_prepare(
-                    df,
-                    table_name
+                success, email_details_a, msg = db.insert_email_details(
+                    email_master_a, subject, sheet_name, total_rows, received_date
                 )
                 
-                if not is_valid:
-                    self.logger.error(f"Data validation failed: {message}")
+                if not success:
+                    self.logger.error(f"Failed to insert into Email_Details: {msg}")
+                    self.stats['errors'] += 1
                     return
                 
-                # Insert with duplicate checking
-                success, rows, msg = db.insert_with_tracking(
+                # Step 3: Create data table with prefixed name
+                prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{table_name}"
+                
+                if not db.table_exists(prefixed_table_name):
+                    self.logger.info(f"Table {prefixed_table_name} doesn't exist, creating...")
+                    create_sql = self.excel_service.generate_create_table_sql(
+                        table_name,
+                        prepared_df,
+                        email_master_a,
+                        email_details_a
+                    )
+                    # DEBUG: Log CREATE TABLE SQL
+                    self.logger.info(f"CREATE TABLE SQL:\n{create_sql}")
+                    db.execute_query(create_sql)
+                    self.logger.info(f"Table {prefixed_table_name} created successfully")
+                
+                # Step 4: Insert data into prefixed table
+                success, rows, message = db.insert_dataframe(
                     prepared_df,
-                    table_name,
-                    email_id,
-                    check_duplicates=True
+                    prefixed_table_name,
+                    sender
                 )
                 
                 if success:
                     self.stats['rows_inserted'] += rows
-                    self.logger.info(f"Data insertion: {msg}")
+                    self.logger.info(f"Data inserted into {prefixed_table_name}: {message}")
                 else:
-                    self.logger.error(f"Data insertion failed: {msg}")
+                    self.logger.error(f"Data insertion failed: {message}")
                     self.stats['errors'] += 1
-                    
+            
         except Exception as e:
             self.logger.error(f"Error processing Excel file {file_path}: {str(e)}")
             self.stats['errors'] += 1
@@ -234,13 +266,13 @@ class EmailAutomation:
             # Try to move to processed folder first
             if self.settings.email_processed_folder:
                 if email_service.move_to_folder(
-                    email_id,
+                    email_data,
                     self.settings.email_processed_folder
                 ):
                     return
             
             # Fall back to marking as read
-            email_service.mark_as_read(email_id)
+            email_service.mark_as_read(email_data)
             
         except Exception as e:
             self.logger.warning(f"Post-processing failed for email {email_id}: {str(e)}")

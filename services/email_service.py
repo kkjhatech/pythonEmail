@@ -317,9 +317,10 @@ class EmailService:
             self.logger.error(f"Failed to download attachment: {str(e)}")
             return None
     
-    def mark_as_read(self, email_id: str) -> bool:
+    def mark_as_read(self, email_data: Dict[str, Any]) -> bool:
         """Mark email as read."""
         try:
+            email_id = email_data.get('id', '')
             self.connection.store(email_id.encode(), '+FLAGS', '\\Seen')
             self.logger.info(f"Marked email {email_id} as read")
             return True
@@ -327,9 +328,10 @@ class EmailService:
             self.logger.error(f"Failed to mark email as read: {str(e)}")
             return False
     
-    def move_to_folder(self, email_id: str, target_folder: str) -> bool:
+    def move_to_folder(self, email_data: Dict[str, Any], target_folder: str) -> bool:
         """Move email to specified folder."""
         try:
+            email_id = email_data.get('id', '')
             # Copy to target folder
             self.connection.copy(email_id.encode(), target_folder)
             # Mark as deleted in inbox

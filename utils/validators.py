@@ -105,6 +105,9 @@ class ExcelValidator:
             clean_col = clean_col.replace(' ', '_')
             clean_col = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_col)
             
+            # Remove trailing underscores (from trailing spaces/special chars)
+            clean_col = clean_col.rstrip('_')
+            
             # Ensure starts with letter or underscore
             if clean_col[0].isdigit():
                 clean_col = f"col_{clean_col}"
@@ -141,5 +144,9 @@ class ExcelValidator:
         
         # Replace NaN with None for SQL NULL
         df = df.where(pd.notnull(df), None)
+        
+        # FORCE all columns to string to ensure character data is preserved
+        df = df.astype(str)
+        df = df.replace('None', '')  # Replace string 'None' with empty string
         
         return df, table_name, list(df.columns)

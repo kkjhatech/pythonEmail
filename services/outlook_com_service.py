@@ -2,6 +2,7 @@
 
 import win32com.client
 import pythoncom
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
@@ -112,14 +113,22 @@ class OutlookCOMAutoService:
                         'outlook_attachment': att
                     })
             
+            # Create a readable email_id from EntryID hash
+            entry_id = item.EntryID
+            if isinstance(entry_id, bytes):
+                email_id = hashlib.sha256(entry_id).hexdigest()[:16]
+            else:
+                email_id = hashlib.sha256(str(entry_id).encode()).hexdigest()[:16]
+            
             return {
-                'id': item.EntryID,
+                'id': email_id,
                 'subject': getattr(item, 'Subject', ''),
                 'sender': f"{getattr(item, 'SenderName', '')} <{sender_email}>",
                 'sender_email': sender_email.lower(),
                 'date': getattr(item, 'ReceivedTime', datetime.now()),
                 'attachments': attachments,
-                'outlook_item': item
+                'outlook_item': item,
+                'outlook_entry_id': item.EntryID  # Keep original for operations
             }
         except Exception as e:
             return None
@@ -152,23 +161,34 @@ class OutlookCOMAutoService:
             self.logger.error(f"Download failed: {str(e)}")
             return None
     
-    def mark_as_read(self, email_id: str) -> bool:
+    def mark_as_read(self, email_data: Dict[str, Any]) -> bool:
         """Mark email as read."""
         try:
-            # Find item by EntryID
-            item = self.namespace.GetItemFromID(email_id)
+            # Use original EntryID from email_data
+            entry_id = email_data.get('outlook_entry_id')
+            if not entry_id:
+                self.logger.error("No outlook_entry_id found in email_data")
+                return False
+            
+            item = self.namespace.GetItemFromID(entry_id)
             if item:
                 item.UnRead = False
-                self.logger.info(f"Marked {email_id} as read")
+                self.logger.info(f"Marked {email_data['id']} as read")
                 return True
             return False
         except Exception as e:
             self.logger.error(f"Failed: {str(e)}")
             return False
     
-    def move_to_folder(self, email_id: str, target_folder: str) -> bool:
+    def move_to_folder(self, email_data: Dict[str, Any], target_folder: str) -> bool:
         """Move email to folder."""
         try:
+            # Get original EntryID
+            entry_id = email_data.get('outlook_entry_id')
+            if not entry_id:
+                self.logger.error("No outlook_entry_id found in email_data")
+                return False
+            
             # Find destination folder
             dest_folder = None
             for folder in self.inbox.Folders:
@@ -182,10 +202,10 @@ class OutlookCOMAutoService:
                 dest_folder = self.inbox.Folders.Add(target_folder)
             
             # Move item
-            item = self.namespace.GetItemFromID(email_id)
+            item = self.namespace.GetItemFromID(entry_id)
             if item:
                 item.Move(dest_folder)
-                self.logger.info(f"Moved {email_id} to {target_folder}")
+                self.logger.info(f"Moved {email_data['id']} to {target_folder}")
                 return True
             return False
             
