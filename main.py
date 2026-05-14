@@ -155,7 +155,7 @@ class EmailAutomation:
             self.logger.info(f"Excel file read successfully: {len(df)} rows")
             
             # Validate and prepare data
-            is_valid, prepared_df, message = self.excel_service.validate_and_prepare_data(df, file_path)
+            is_valid, prepared_df, message = self.excel_service.validate_and_prepare(df, file_path)
             if not is_valid:
                 self.logger.error(f"Data validation failed: {message}")
                 self.stats['errors'] += 1
