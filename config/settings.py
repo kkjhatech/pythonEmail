@@ -84,7 +84,7 @@ class Settings:
             # Filters
             allowed_senders=cls._parse_list(os.getenv('ALLOWED_SENDERS', '')),
             subject_keywords=cls._parse_list(os.getenv('SUBJECT_KEYWORDS', '')),
-            file_extensions=cls._parse_list(os.getenv('FILE_EXTENSIONS', '.xlsx,.xls,.csv')),
+            file_extensions=cls._parse_list(os.getenv('FILE_EXTENSIONS', '.xlsx,.xls,.xlsb,.csv')),
         )
     
     @staticmethod

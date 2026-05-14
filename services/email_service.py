@@ -349,13 +349,18 @@ class EmailService:
     def has_excel_attachments(self, email_data: Dict[str, Any]) -> bool:
         """Check if email has Excel attachments matching configured extensions."""
         if not email_data.get('attachments'):
+            self.logger.debug("No attachments found in email")
             return False
         
         extensions = [ext.lower() for ext in self.settings.file_extensions]
+        self.logger.debug(f"Checking for Excel attachments with extensions: {extensions}")
         
         for attachment in email_data['attachments']:
             filename = attachment['filename'].lower()
+            self.logger.debug(f"Checking attachment: {filename}")
             if any(filename.endswith(ext) for ext in extensions):
+                self.logger.debug(f"Found Excel attachment: {filename}")
                 return True
         
+        self.logger.debug("No Excel attachments found")
         return False

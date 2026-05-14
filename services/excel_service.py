@@ -43,7 +43,7 @@ class ExcelService:
             
             if extension == '.csv':
                 df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
-            elif extension in ['.xlsx', '.xls']:
+            elif extension in ['.xlsx', '.xls', '.xlsb']:
                 result = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, dtype=str, keep_default_na=False)
                 # Handle multi-sheet files - returns dict instead of DataFrame
                 if isinstance(result, dict):

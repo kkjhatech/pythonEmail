@@ -98,6 +98,15 @@ class EmailAutomation:
         
         self.logger.info(f"Processing email from {sender}: {subject}")
         
+        # Debug: Show file extensions being checked
+        self.logger.info(f"Checking for Excel files with extensions: {self.settings.file_extensions}")
+        
+        # Debug: Show all attachments found
+        attachments = email_data.get('attachments', [])
+        self.logger.info(f"Found {len(attachments)} attachments in email")
+        for i, attachment in enumerate(attachments):
+            self.logger.info(f"  Attachment {i+1}: {attachment.get('filename', 'Unknown')}")
+        
         # Check for Excel attachments
         if not email_service.has_excel_attachments(email_data):
             self.logger.info("No Excel attachments found, skipping")
@@ -138,29 +147,24 @@ class EmailAutomation:
         try:
             # Read Excel file
             df = self.excel_service.read_excel(file_path)
-            
             if df is None:
-                self.logger.error(f"Failed to read file: {file_path}")
+                self.logger.error(f"Failed to read Excel file: {file_path}")
+                self.stats['errors'] += 1
                 return
             
-            # Get table name from filename
-            table_name = Path(file_path).stem
+            self.logger.info(f"Excel file read successfully: {len(df)} rows")
             
             # Validate and prepare data
-            is_valid, prepared_df, message = self.excel_service.validate_and_prepare(
-                df,
-                table_name
-            )
-            
+            is_valid, prepared_df, message = self.excel_service.validate_and_prepare_data(df, file_path)
             if not is_valid:
                 self.logger.error(f"Data validation failed: {message}")
+                self.stats['errors'] += 1
                 return
             
-            # DEBUG: Check prepared data
-            self.logger.info(f"Prepared data dtypes:\n{prepared_df.dtypes}")
-            self.logger.info(f"Prepared data first row:\n{prepared_df.iloc[0].to_dict()}")
+            self.logger.info(f"Data validation passed: {len(prepared_df)} rows prepared")
             
             # Insert into database with new structure
+            self.logger.info(f"Starting database insertion for file: {file_path}")
             with DatabaseManager(self.settings) as db:
                 # Step 1: Insert into Email_Master table using sender email
                 sender_email = email_data.get('sender_email', '')
@@ -172,8 +176,7 @@ class EmailAutomation:
                     else:
                         sender_email = sender_str.lower()
                 
-                self.logger.info(f"DEBUG: email_data keys: {list(email_data.keys())}")
-                self.logger.info(f"DEBUG: sender_email being inserted: '{sender_email}'")
+                self.logger.info(f"Attempting to insert sender email: {sender_email}")
                 success, email_master_a, msg = db.insert_email_master(sender_email, "System")
                 
                 if not success:
@@ -181,12 +184,15 @@ class EmailAutomation:
                     self.stats['errors'] += 1
                     return
                 
+                self.logger.info(f"Email_Master inserted successfully with ID: {email_master_a}")
+                
                 # Step 2: Insert into Email_Details table
                 subject = email_data.get('subject', '')
                 sheet_name = 'Sheet1'  # Default, could be enhanced to detect actual sheet name
                 total_rows = len(prepared_df)
                 received_date = email_data.get('date', datetime.now())
                 
+                self.logger.info(f"Inserting Email_Details - Subject: '{subject}', Rows: {total_rows}")
                 success, email_details_a, msg = db.insert_email_details(
                     email_master_a, subject, sheet_name, total_rows, received_date
                 )
@@ -196,23 +202,28 @@ class EmailAutomation:
                     self.stats['errors'] += 1
                     return
                 
-                # Step 3: Create data table with prefixed name
-                prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{table_name}"
+                self.logger.info(f"Email_Details inserted successfully with ID: {email_details_a}")
                 
+                # Step 3: Create data table with prefixed name
+                prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{self._generate_table_name(file_path)}"
+                
+                self.logger.info(f"Creating prefixed table: {prefixed_table_name}")
                 if not db.table_exists(prefixed_table_name):
                     self.logger.info(f"Table {prefixed_table_name} doesn't exist, creating...")
                     create_sql = self.excel_service.generate_create_table_sql(
-                        table_name,
+                        self._generate_table_name(file_path),
                         prepared_df,
                         email_master_a,
                         email_details_a
                     )
-                    # DEBUG: Log CREATE TABLE SQL
-                    self.logger.info(f"CREATE TABLE SQL:\n{create_sql}")
+                    self.logger.info(f"Executing CREATE TABLE SQL...")
                     db.execute_query(create_sql)
                     self.logger.info(f"Table {prefixed_table_name} created successfully")
+                else:
+                    self.logger.info(f"Table {prefixed_table_name} already exists")
                 
                 # Step 4: Insert data into prefixed table
+                self.logger.info(f"Attempting to insert {len(prepared_df)} rows into {prefixed_table_name}")
                 success, rows, message = db.insert_dataframe(
                     prepared_df,
                     prefixed_table_name,
@@ -222,7 +233,7 @@ class EmailAutomation:
                 
                 if success:
                     self.stats['rows_inserted'] += rows
-                    self.logger.info(f"Data inserted into {prefixed_table_name}: {message}")
+                    self.logger.info(f"Successfully inserted {rows} rows into {prefixed_table_name}")
                 else:
                     self.logger.error(f"Data insertion failed: {message}")
                     self.stats['errors'] += 1
