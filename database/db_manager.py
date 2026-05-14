@@ -141,7 +141,7 @@ class DatabaseManager:
         table_name: str,
         sender_email: Optional[str] = None,
         email_details_a: Optional[int] = None,
-        batch_size: int = 1000
+        batch_size: int = 10000
     ) -> Tuple[bool, int, str]:
         """
         Insert DataFrame into SQL Server table.
@@ -158,9 +158,12 @@ class DatabaseManager:
         """
         try:
             with self.connection.cursor() as cursor:
+                # Enable fast executemany for bulk inserts
+                cursor.fast_executemany = True
+
                 # Get table columns
                 table_columns = self.get_table_columns(table_name)
-                
+
                 # Check if this is a prefixed table (starts with PY_ followed by numbers)
                 is_prefixed_table = table_name.startswith("PY_") and "_" in table_name[3:]
                 
