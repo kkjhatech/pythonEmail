@@ -317,3 +317,4 @@ Ctrl+C
 - Primary: [Contact Information]
 - Secondary: [Contact Information]
 - On-call: [Contact Information]
+pyinstaller --onefile --hidden-import=win32com --hidden-import=win32com.client --hidden-import=win32con main.py
