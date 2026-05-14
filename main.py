@@ -247,10 +247,16 @@ class EmailAutomation:
         path = Path(file_path)
         name = path.stem
         
-        # Remove timestamp suffix (format: _YYYYMMDD_HHMMSS)
+        # Sanitize the filename (including any timestamp suffix) for a SQL table name
         import re
-        name = re.sub(r'_\d{8}_\d{6}$', '', name)
-        
+        # Replace spaces/dashes with underscore
+        name = name.replace(' ', '_').replace('-', '_')
+        # Keep only alphanumerics and underscore
+        name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+        # Trim to 100 characters (SQL Server identifier limit)
+        if len(name) > 100:
+            name = name[:100]
+
         # Sanitize for SQL
         name = name.replace(' ', '_').replace('-', '_')
         name = re.sub(r'[^a-zA-Z0-9_]', '', name)
