@@ -164,7 +164,7 @@ class ExcelService:
         table_name: str,
         df: pd.DataFrame,
         email_master_a: int = None,
-        email_details_a: int = None,
+        Email_Received_Details_a: int = None,
         include_email_id: bool = True
     ) -> str:
         """
@@ -174,7 +174,7 @@ class ExcelService:
             table_name: Name for the new table
             df: DataFrame to analyze
             email_master_a: Email_Master_A ID for prefix
-            email_details_a: Email_Details_A ID for prefix
+            Email_Received_Details_a: Email_Details_A ID for prefix
             include_email_id: Whether to add email_id tracking column
             
         Returns:
@@ -184,13 +184,13 @@ class ExcelService:
         sql_types = self.infer_sql_types(df)
         
         # Build table name with prefix if IDs provided
-        if email_master_a and email_details_a:
+        if email_master_a and Email_Received_Details_a:
             # Extract filename from table_name
             filename = table_name
             if '.' in filename:
                 filename = filename.split('.')[0]
             # Create prefixed table name with just numeric values
-            prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{filename}"
+            prefixed_table_name = f"PY_{email_master_a}_{Email_Received_Details_a}_{filename}"
         else:
             prefixed_table_name = table_name
         
@@ -202,10 +202,10 @@ class ExcelService:
         
         # Add tracking columns only for non-prefixed tables
         # For prefixed tables (PY_1_2_...), add Email_Details_A for join purposes
-        if include_email_id and not (email_master_a and email_details_a):
+        if include_email_id and not (email_master_a and Email_Received_Details_a):
             columns.append("    sender_email NVARCHAR(255)")
             columns.append("    processed_date DATETIME DEFAULT GETDATE()")
-        elif include_email_id and (email_master_a and email_details_a):
+        elif include_email_id and (email_master_a and Email_Received_Details_a):
             # For prefixed tables, add Email_Details_A for join and processed_date
             columns.append(f"    [Email_Details_A] INT")
             columns.append("    processed_date DATETIME DEFAULT GETDATE()")

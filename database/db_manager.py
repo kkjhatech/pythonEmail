@@ -140,7 +140,7 @@ class DatabaseManager:
         df: pd.DataFrame,
         table_name: str,
         sender_email: Optional[str] = None,
-        email_details_a: Optional[int] = None,
+        email_received_details_a: Optional[int] = None,
         batch_size: int = 10000
     ) -> Tuple[bool, int, str]:
         """
@@ -150,7 +150,7 @@ class DatabaseManager:
             df: DataFrame to insert
             table_name: Target table name
             sender_email: Sender email to include
-            email_details_a: Email_Details_A ID for prefixed tables
+            email_received_details_a: Email_Details_A ID for prefixed tables
             batch_size: Number of rows to insert at once
             
         Returns:
@@ -168,10 +168,10 @@ class DatabaseManager:
                 is_prefixed_table = table_name.startswith("PY_") and "_" in table_name[3:]
                 
                 # Add columns based on table type
-                if is_prefixed_table and email_details_a and 'Email_Details_A' in table_columns:
+                if is_prefixed_table and email_received_details_a and 'email_received_details_a' in table_columns:
                     # For prefixed tables, add Email_Details_A column
                     df = df.copy()
-                    df['Email_Details_A'] = email_details_a
+                    df['email_received_details_a'] = email_received_details_a
                 elif 'sender_email' in table_columns and sender_email and not is_prefixed_table:
                     # For regular tables, add sender_email column
                     df = df.copy()
@@ -338,13 +338,13 @@ class DatabaseManager:
                 pass
             return False, 0, str(e)
     
-    def insert_email_details(self, email_master_a: int, subject: str, sheet_name: str, 
+    def insert_email_details(self, email_master_a: int, subject: str, sheet_name: str,
                            total_rows: int, received_date: datetime) -> Tuple[bool, int, str]:
         """
         Insert email details into Email_Details table.
         
         Returns:
-            Tuple of (success, email_details_a_id, message)
+            Tuple of (success, email_received_details_a, message)
         """
         try:
             cursor = self.connection.cursor()
@@ -364,27 +364,31 @@ class DatabaseManager:
             
             try:
                 # Try stored procedure first
+                self.logger.info(f"Hi {email_master_a}")
                 cursor.execute(
-                    "EXEC usp_insert_email_details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
-                    (email_master_a, subject, sheet_name, total_rows, received_date)
+                   "EXEC usp_insert_Email_Received_Details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
+                   (email_master_a, subject, sheet_name, total_rows, received_date)
                 )
+
+                self.logger.info(f"next {email_master_a}")
             except Exception as proc_error:
                 self.logger.warning(f"Stored procedure failed: {proc_error}. Trying direct SQL insert.")
                 # Fallback to direct SQL
                 cursor.execute(
-                    "INSERT INTO Email_Details (EmailID_N, Subject_Name, SheetName, TotalRows, ReceivedDate) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO Email_Received_Details (EmailID_N, Subject_Name, SheetName, TotalRows, ReceivedDate) VALUES (?, ?, ?, ?, ?)",
                     (email_master_a, subject, sheet_name, total_rows, received_date)
                 )
             
             # Get the inserted ID - try multiple methods
             try:
                 # Method 1: Try to get result from stored procedure
+                self.logger.info(f"retrive {email_master_a}")
                 result = cursor.fetchone()
                 if result and result[0] is not None:
-                    email_details_a = int(result[0])
+                    email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_details_a}")
-                    return True, email_details_a, "Email details inserted successfully"
+                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a}")
+                    return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
             
@@ -393,22 +397,22 @@ class DatabaseManager:
                 cursor.execute("SELECT SCOPE_IDENTITY()")
                 result = cursor.fetchone()
                 if result and result[0] is not None:
-                    email_details_a = int(result[0])
+                    email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_details_a} (using SCOPE_IDENTITY)")
-                    return True, email_details_a, "Email details inserted successfully"
+                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using SCOPE_IDENTITY)")
+                    return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
             
             # Method 3: Use IDENT_CURRENT as last resort
             try:
-                cursor.execute("SELECT IDENT_CURRENT('Email_Details')")
+                cursor.execute("SELECT IDENT_CURRENT('Email_Received_Details')")
                 result = cursor.fetchone()
                 if result and result[0] is not None:
-                    email_details_a = int(result[0])
+                    email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_details_a} (using IDENT_CURRENT)")
-                    return True, email_details_a, "Email details inserted successfully"
+                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using IDENT_CURRENT)")
+                    return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
             
@@ -440,6 +444,25 @@ class DatabaseManager:
             self.logger.error(f"Query execution failed: {str(e)}")
             return []
     
+    def update_email_received_details(self, email_details_a: int, upload_date: datetime, table_name: str) -> bool:
+        """Update Email_Received_Details with UploadDate and TableName for a given record."""
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE Email_Received_Details SET UploadDate = ?, TableName = ? WHERE Email_Received_Details_A = ?",
+                    (upload_date, table_name, email_details_a)
+                )
+                self.connection.commit()
+                self.logger.info(f"Updated Email_Received_Details A={email_details_a} with TableName={table_name}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Failed to update Email_Received_Details: {str(e)}")
+            try:
+                self.connection.rollback()
+            except:
+                pass
+            return False
+
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get statistics about processed data."""
         try:

@@ -234,6 +234,8 @@ class EmailAutomation:
                 if success:
                     self.stats['rows_inserted'] += rows
                     self.logger.info(f"Successfully inserted {rows} rows into {prefixed_table_name}")
+                    # Update Email_Received_Details with UploadDate and TableName
+                    db.update_email_received_details(email_details_a, datetime.now(), prefixed_table_name)
                 else:
                     self.logger.error(f"Data insertion failed: {message}")
                     self.stats['errors'] += 1
