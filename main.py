@@ -193,7 +193,7 @@ class EmailAutomation:
                 received_date = email_data.get('date', datetime.now())
                 
                 self.logger.info(f"Inserting Email_Details - Subject: '{subject}', Rows: {total_rows}")
-                success, email_details_a, msg = db.insert_email_details(
+                success, email_received_details_a, msg = db.insert_email_details(
                     email_master_a, subject, sheet_name, total_rows, received_date
                 )
                 
@@ -202,10 +202,10 @@ class EmailAutomation:
                     self.stats['errors'] += 1
                     return
                 
-                self.logger.info(f"Email_Details inserted successfully with ID: {email_details_a}")
+                self.logger.info(f"Email_Details inserted successfully with ID: {email_received_details_a}")
                 
                 # Step 3: Create data table with prefixed name
-                prefixed_table_name = f"PY_{email_master_a}_{email_details_a}_{self._generate_table_name(file_path)}"
+                prefixed_table_name = f"PY_{email_master_a}_{email_received_details_a}_{self._generate_table_name(file_path)}"
                 
                 self.logger.info(f"Creating prefixed table: {prefixed_table_name}")
                 if not db.table_exists(prefixed_table_name):
@@ -214,7 +214,7 @@ class EmailAutomation:
                         self._generate_table_name(file_path),
                         prepared_df,
                         email_master_a,
-                        email_details_a
+                        email_received_details_a
                     )
                     self.logger.info(f"Executing CREATE TABLE SQL...")
                     db.execute_query(create_sql)
@@ -228,14 +228,14 @@ class EmailAutomation:
                     prepared_df,
                     prefixed_table_name,
                     sender,
-                    email_details_a
+                    email_received_details_a
                 )
                 
                 if success:
                     self.stats['rows_inserted'] += rows
                     self.logger.info(f"Successfully inserted {rows} rows into {prefixed_table_name}")
                     # Update Email_Received_Details with UploadDate and TableName
-                    db.update_email_received_details(email_details_a, datetime.now(), prefixed_table_name)
+                    db.update_email_received_details(email_received_details_a, datetime.now(), prefixed_table_name)
                 else:
                     self.logger.error(f"Data insertion failed: {message}")
                     self.stats['errors'] += 1

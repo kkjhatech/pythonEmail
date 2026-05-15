@@ -83,18 +83,19 @@ class DatabaseManager:
             return False
     
     def get_table_columns(self, table_name: str) -> List[str]:
-        """Get list of column names for a table."""
+        """Get list of column names for a table.
+        Returns the column names exactly as defined in the database, without stripping any characters.
+        """
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute("""
-                    SELECT COLUMN_NAME 
-                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
                     WHERE TABLE_NAME = ?
                     ORDER BY ORDINAL_POSITION
                 """, (table_name,))
-                # Strip brackets from column names if present (for proper matching)
                 cols = [row[0] for row in cursor.fetchall()]
-                return [col.strip('[]') for col in cols]
+                return cols
         except Exception as e:
             self.logger.error(f"Error getting table columns: {str(e)}")
             return []
@@ -150,7 +151,7 @@ class DatabaseManager:
             df: DataFrame to insert
             table_name: Target table name
             sender_email: Sender email to include
-            email_received_details_a: Email_Details_A ID for prefixed tables
+            email_received_details_a: email_received_details_a ID for prefixed tables
             batch_size: Number of rows to insert at once
             
         Returns:
@@ -168,36 +169,45 @@ class DatabaseManager:
                 is_prefixed_table = table_name.startswith("PY_") and "_" in table_name[3:]
                 
                 # Add columns based on table type
-                if is_prefixed_table and email_received_details_a and 'email_received_details_a' in table_columns:
-                    # For prefixed tables, add Email_Details_A column
+                if is_prefixed_table and email_received_details_a and 'Email_Received_Details_A' in table_columns:
+                    # For prefixed tables, add email_received_details_a column
                     df = df.copy()
-                    df['email_received_details_a'] = email_received_details_a
+                    df['Email_Received_Details_A'] = email_received_details_a
                 elif 'sender_email' in table_columns and sender_email and not is_prefixed_table:
                     # For regular tables, add sender_email column
                     df = df.copy()
                     df['sender_email'] = sender_email
                 
-                # Prepare column names for SQL
+                # Prepare column names for SQL with robust matching (ignore brackets, spaces, underscores, case)
                 columns = []
-                for col in df.columns:
-                    if col in table_columns:
-                        # Don't double-wrap if column already has brackets
-                        if col.startswith('[') and col.endswith(']'):
-                            columns.append(col)
+                matched_df_cols = []  # keep DataFrame columns that have a match
+                for df_col in df.columns:
+                    # Normalise DataFrame column: remove brackets, spaces, underscores, lower case
+                    norm_df = df_col.replace('[', '').replace(']', '').replace(' ', '').replace('_', '').lower()
+                    match = None
+                    for tbl_col in table_columns:
+                        # Normalise table column similarly
+                        norm_tbl = tbl_col.replace('[', '').replace(']', '').replace(' ', '').replace('_', '').lower()
+                        if norm_df == norm_tbl:
+                            match = tbl_col
+                            break
+                    if match:
+                        # Use the exact table column name, adding brackets only if needed
+                        if match.startswith('[') and match.endswith(']'):
+                            columns.append(match)
                         else:
-                            columns.append(f"[{col}]")
-                
+                            columns.append(f"[{match}]")
+                        matched_df_cols.append(df_col)
+
                 if not columns:
                     return False, 0, "No matching columns found"
-                
+
                 # Prepare INSERT statement
                 placeholders = ", ".join(["?" for _ in columns])
                 insert_sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-                
-                # Convert DataFrame to list of tuples
-                # Use original column names from DataFrame
-                original_columns = [col.strip('[]') for col in columns] if all(c.startswith('[') and c.endswith(']') for c in columns) else columns
-                data = df[[col for col in df.columns if col in table_columns]].values.tolist()
+
+                # Convert DataFrame to list of tuples using only the matched columns
+                data = df[matched_df_cols].values.tolist()
                 
                 # Insert in batches
                 rows_inserted = 0
@@ -444,16 +454,16 @@ class DatabaseManager:
             self.logger.error(f"Query execution failed: {str(e)}")
             return []
     
-    def update_email_received_details(self, email_details_a: int, upload_date: datetime, table_name: str) -> bool:
+    def update_email_received_details(self, email_received_details_a: int, upload_date: datetime, table_name: str) -> bool:
         """Update Email_Received_Details with UploadDate and TableName for a given record."""
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(
                     "UPDATE Email_Received_Details SET UploadDate = ?, TableName = ? WHERE Email_Received_Details_A = ?",
-                    (upload_date, table_name, email_details_a)
+                    (upload_date, table_name, email_received_details_a)
                 )
                 self.connection.commit()
-                self.logger.info(f"Updated Email_Received_Details A={email_details_a} with TableName={table_name}")
+                self.logger.info(f"Updated Email_Received_Details A={email_received_details_a} with TableName={table_name}")
                 return True
         except Exception as e:
             self.logger.error(f"Failed to update Email_Received_Details: {str(e)}")

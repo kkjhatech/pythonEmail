@@ -31,10 +31,10 @@
    ```sql
    -- Email_Master Table
    CREATE TABLE Email_Master (
-       Email_Master_A INT IDENTITY(1,1) PRIMARY KEY,
-       EmailID NVARCHAR(255) NOT NULL,
-       CreatedDate DATETIME DEFAULT GETDATE(),
-       CreatedBy NVARCHAR(100)
+       [Email_Master_A] INT IDENTITY(1,1) PRIMARY KEY,
+       [EmailID] NVARCHAR(255) NOT NULL,
+       [CreatedDate] DATETIME DEFAULT GETDATE(),
+       [CreatedBy] NVARCHAR(100)
    );
 
    -- Email_Details Table
