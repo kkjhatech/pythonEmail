@@ -9,42 +9,43 @@ from utils.validators import ExcelValidator
 
 class ExcelService:
     """Service for handling Excel file operations."""
-    
+
     def __init__(self, log_folder: str):
         self.logger = get_logger('ExcelService', log_folder)
         self.validator = ExcelValidator()
-    
+
     def read_excel(
-        self,
-        file_path: str,
-        sheet_name: Optional[str] = None,
-        header_row: int = 0
+            self,
+            file_path: str,
+            sheet_name: Optional[str] = None,
+            header_row: int = 0
     ) -> Optional[pd.DataFrame]:
         """
         Read Excel file into pandas DataFrame.
-        
+
         Args:
             file_path: Path to Excel file
             sheet_name: Sheet to read (None for first sheet)
             header_row: Row to use as header (0-indexed)
-        
+
         Returns:
             DataFrame or None if failed
         """
         try:
             path = Path(file_path)
-            
+
             if not path.exists():
                 self.logger.error(f"File not found: {file_path}")
                 return None
-            
+
             # Determine file type
             extension = path.suffix.lower()
-            
+
             if extension == '.csv':
                 df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
             elif extension in ['.xlsx', '.xls', '.xlsb']:
-                result = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, dtype=str, keep_default_na=False)
+                result = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, dtype=str,
+                                       keep_default_na=False)
                 # Handle multi-sheet files - returns dict instead of DataFrame
                 if isinstance(result, dict):
                     if not result:
@@ -59,14 +60,14 @@ class ExcelService:
             else:
                 self.logger.error(f"Unsupported file type: {extension}")
                 return None
-            
+
             self.logger.info(f"Successfully read {file_path}: {len(df)} rows, {len(df.columns)} columns")
             return df
-            
+
         except Exception as e:
             self.logger.error(f"Failed to read Excel file {file_path}: {str(e)}")
             return None
-    
+
     def get_sheet_names(self, file_path: str) -> List[str]:
         """Get list of sheet names from Excel file."""
         try:
@@ -77,16 +78,16 @@ class ExcelService:
         except Exception as e:
             self.logger.error(f"Failed to get sheet names: {str(e)}")
             return []
-    
+
     def validate_and_prepare(
-        self,
-        df: pd.DataFrame,
-        table_name: str,
-        required_columns: Optional[List[str]] = None
+            self,
+            df: pd.DataFrame,
+            table_name: str,
+            required_columns: Optional[List[str]] = None
     ) -> Tuple[bool, Optional[pd.DataFrame], str]:
         """
         Validate DataFrame and prepare for database insertion.
-        
+
         Returns:
             Tuple of (is_valid, prepared_df, message)
         """
@@ -96,29 +97,29 @@ class ExcelService:
             required_columns=required_columns,
             allow_empty=False
         )
-        
+
         for warning in warnings:
             self.logger.warning(warning)
-        
+
         if not is_valid:
             error_msg = '; '.join(errors)
             self.logger.error(f"Validation failed: {error_msg}")
             return False, None, error_msg
-        
+
         # Prepare
         prepared_df, table_name, columns = self.validator.prepare_for_insert(
             df,
             table_name,
-            sanitize_columns=False
+            sanitize_columns=True
         )
-        
+
         self.logger.info(f"Data validated and prepared for table: {table_name}")
         return True, prepared_df, f"Ready to insert {len(prepared_df)} rows into {table_name}"
-    
+
     def infer_sql_types(self, df: pd.DataFrame) -> Dict[str, str]:
         """
         Infer SQL data types from DataFrame columns.
-        
+
         Returns:
             Dictionary mapping column names to SQL types
         """
@@ -132,25 +133,25 @@ class ExcelService:
             'bool': 'BIT',
             'datetime64[ns]': 'DATETIME',
         }
-        
+
         sql_types = {}
         for col in df.columns:
             dtype = str(df[col].dtype)
-            
+
             # Check if column contains datetime strings
             if dtype == 'object':
                 sample = df[col].dropna().head(10)
                 if self._is_datetime_column(sample):
                     sql_types[col] = 'DATETIME'
                     continue
-            
+
             sql_types[col] = type_mapping.get(dtype, 'NVARCHAR(500)')
-        
+
         # DEBUG: Log SQL types
         self.logger.info(f"SQL types inferred: {sql_types}")
-        
+
         return sql_types
-    
+
     def _is_datetime_column(self, series: pd.Series) -> bool:
         """Check if column contains datetime values."""
         try:
@@ -158,31 +159,31 @@ class ExcelService:
             return True
         except:
             return False
-    
+
     def generate_create_table_sql(
-        self,
-        table_name: str,
-        df: pd.DataFrame,
-        email_master_a: int = None,
-        email_received_details_a: int = None,
-        include_email_id: bool = True
+            self,
+            table_name: str,
+            df: pd.DataFrame,
+            email_master_a: int = None,
+            email_received_details_a: int = None,
+            include_email_id: bool = True
     ) -> str:
         """
         Generate CREATE TABLE SQL statement based on DataFrame columns.
-        
+
         Args:
             table_name: Name for the new table
             df: DataFrame to analyze
             email_master_a: Email_Master_A ID for prefix
             email_received_details_a: email_received_details_a ID for prefix
             include_email_id: Whether to add email_id tracking column
-            
+
         Returns:
             CREATE TABLE SQL statement
         """
         # Infer SQL types
         sql_types = self.infer_sql_types(df)
-        
+
         # Build table name with prefix if IDs provided
         if email_master_a and email_received_details_a:
             # Extract filename from table_name
@@ -193,13 +194,13 @@ class ExcelService:
             prefixed_table_name = f"PY_{email_master_a}_{email_received_details_a}_{filename}"
         else:
             prefixed_table_name = table_name
-        
+
         # Build column definitions
         columns = []
-        
+
         # Add ID column
         columns.append("    id INT IDENTITY(1,1) PRIMARY KEY")
-        
+
         # Add tracking columns only for non-prefixed tables
         # For prefixed tables (PY_1_2_...), add email_received_details_a for join purposes
         if include_email_id and not (email_master_a and email_received_details_a):
@@ -209,34 +210,36 @@ class ExcelService:
             # For prefixed tables, add email_received_details_a for join and processed_date
             columns.append(f"    [Email_Received_Details_A] INT")
             columns.append("    processed_date DATETIME DEFAULT GETDATE()")
-        
+
         # Add data columns
         for col in df.columns:
             sql_type = sql_types.get(col, 'NVARCHAR(500)')
-            # Preserve original column name, only wrap in brackets for SQL safety
-            # Handle reserved keywords and special characters by wrapping in brackets
-            safe_col = str(col).strip()
+            # Sanitize column name for SQL
+            safe_col = str(col).strip().replace(' ', '_').replace('-', '_')
+            safe_col = safe_col.rstrip('_')  # Remove trailing underscores
+           # if safe_col[0].isdigit():
+           #     safe_col = f"col_{safe_col}"
             # Wrap in brackets to handle reserved keywords (e.g., 'Add', 'Select', etc.)
-            # and preserve original name exactly as-is
+            # But don't double-wrap if already has brackets
             if not safe_col.startswith('[') and not safe_col.endswith(']'):
                 safe_col = f"[{safe_col}]"
             columns.append(f"    {safe_col} {sql_type}")
-        
+
         # Build CREATE TABLE statement
         create_sql = f"""CREATE TABLE {prefixed_table_name} (
 {',\n'.join(columns)}
 );"""
-        
+
         return create_sql
-    
+
     def create_data_preview(
-        self,
-        df: pd.DataFrame,
-        max_rows: int = 5
+            self,
+            df: pd.DataFrame,
+            max_rows: int = 5
     ) -> Dict[str, Any]:
         """
         Create a preview of the DataFrame for logging.
-        
+
         Returns:
             Dictionary with preview information
         """

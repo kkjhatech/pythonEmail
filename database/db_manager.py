@@ -9,12 +9,12 @@ from utils.logger import get_logger
 
 class DatabaseManager:
     """Manager for SQL Server database operations."""
-    
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.logger = get_logger('DatabaseManager', settings.log_folder)
         self.connection: Optional[pyodbc.Connection] = None
-    
+
     def connect(self) -> bool:
         """Establish database connection."""
         try:
@@ -25,7 +25,7 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Failed to connect to database: {str(e)}")
             return False
-    
+
     def disconnect(self):
         """Close database connection."""
         if self.connection:
@@ -36,14 +36,14 @@ class DatabaseManager:
                 self.logger.warning(f"Error closing database connection: {str(e)}")
             finally:
                 self.connection = None
-    
+
     def __enter__(self):
         self.connect()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
-    
+
     def test_connection(self) -> bool:
         """Test database connectivity."""
         try:
@@ -54,7 +54,7 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Connection test failed: {str(e)}")
             return False
-    
+
     def table_exists(self, table_name: str) -> bool:
         """Check if table exists in database."""
         try:
@@ -68,7 +68,7 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Error checking table existence: {str(e)}")
             return False
-    
+
     def create_table(self, sql: str) -> bool:
         """Execute CREATE TABLE statement."""
         try:
@@ -81,39 +81,38 @@ class DatabaseManager:
             self.logger.error(f"Failed to create table: {str(e)}")
             self.connection.rollback()
             return False
-    
+
     def get_table_columns(self, table_name: str) -> List[str]:
-        """Get list of column names for a table.
-        Returns the column names exactly as defined in the database, without stripping any characters.
-        """
+        """Get list of column names for a table."""
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute("""
-                    SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.COLUMNS
+                    SELECT COLUMN_NAME 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
                     WHERE TABLE_NAME = ?
                     ORDER BY ORDINAL_POSITION
                 """, (table_name,))
+                # Strip brackets from column names if present (for proper matching)
                 cols = [row[0] for row in cursor.fetchall()]
-                return cols
+                return [col.strip('[]') for col in cols]
         except Exception as e:
             self.logger.error(f"Error getting table columns: {str(e)}")
             return []
-    
+
     def check_duplicate(
-        self,
-        table_name: str,
-        email_id: str,
-        data_hash: Optional[str] = None
+            self,
+            table_name: str,
+            email_id: str,
+            data_hash: Optional[str] = None
     ) -> bool:
         """
         Check if data from this email has already been processed.
-        
+
         Args:
             table_name: Target table
             email_id: Email identifier
             data_hash: Optional hash of data content
-        
+
         Returns:
             True if duplicate exists
         """
@@ -129,31 +128,31 @@ class DatabaseManager:
                         SELECT COUNT(*) FROM {table_name} 
                         WHERE email_id = ?
                     """, (email_id,))
-                
+
                 result = cursor.fetchone()
                 return result[0] > 0
         except Exception as e:
             self.logger.error(f"Error checking duplicates: {str(e)}")
             return False
-    
+
     def insert_dataframe(
-        self,
-        df: pd.DataFrame,
-        table_name: str,
-        sender_email: Optional[str] = None,
-        email_received_details_a: Optional[int] = None,
-        batch_size: int = 10000
+            self,
+            df: pd.DataFrame,
+            table_name: str,
+            sender_email: Optional[str] = None,
+            email_received_details_a: Optional[int] = None,
+            batch_size: int = 10000
     ) -> Tuple[bool, int, str]:
         """
         Insert DataFrame into SQL Server table.
-        
+
         Args:
             df: DataFrame to insert
             table_name: Target table name
             sender_email: Sender email to include
             email_received_details_a: email_received_details_a ID for prefixed tables
             batch_size: Number of rows to insert at once
-            
+
         Returns:
             Tuple of (success, rows_inserted, message)
         """
@@ -167,7 +166,7 @@ class DatabaseManager:
 
                 # Check if this is a prefixed table (starts with PY_ followed by numbers)
                 is_prefixed_table = table_name.startswith("PY_") and "_" in table_name[3:]
-                
+
                 # Add columns based on table type
                 if is_prefixed_table and email_received_details_a and 'Email_Received_Details_A' in table_columns:
                     # For prefixed tables, add email_received_details_a column
@@ -177,28 +176,32 @@ class DatabaseManager:
                     # For regular tables, add sender_email column
                     df = df.copy()
                     df['sender_email'] = sender_email
-                
-                # Prepare column names for SQL with robust matching (ignore brackets, spaces, underscores, case)
-                columns = []
-                matched_df_cols = []  # keep DataFrame columns that have a match
-                for df_col in df.columns:
-                    # Normalise DataFrame column: remove brackets, spaces, underscores, lower case
-                    norm_df = df_col.replace('[', '').replace(']', '').replace(' ', '').replace('_', '').lower()
-                    match = None
-                    for tbl_col in table_columns:
-                        # Normalise table column similarly
-                        norm_tbl = tbl_col.replace('[', '').replace(']', '').replace(' ', '').replace('_', '').lower()
-                        if norm_df == norm_tbl:
-                            match = tbl_col
-                            break
-                    if match:
-                        # Use the exact table column name, adding brackets only if needed
-                        if match.startswith('[') and match.endswith(']'):
-                            columns.append(match)
-                        else:
-                            columns.append(f"[{match}]")
-                        matched_df_cols.append(df_col)
 
+                # Prepare column names for SQL with robust matching (ignore hyphens/underscores, case‑insensitive)
+                import re
+                columns = []
+                matched_df_cols = []  # keep the original DataFrame column names that match
+                # Build a map of normalized table column -> original table column name, ignoring optional "col_" prefix
+                table_norm_map = {}
+                for tcol in table_columns:
+                    # Remove brackets, hyphens, underscores, and optional leading "col_"
+                    norm = re.sub(r'[-_]', '', str(tcol)).lower()
+                    if norm.startswith('col') and norm[3:].isdigit():
+                        # e.g., col_01may2026 -> strip leading 'col'
+                        norm = norm[3:]
+                    table_norm_map[norm] = tcol
+                for df_col in df.columns:
+                    norm_df = re.sub(r'[-_]', '', str(df_col)).lower()
+                    # If DataFrame column is a date like 01may2026, also try matching without leading 'col'
+                    if norm_df.startswith('col') and norm_df[3:].isdigit():
+                        norm_df = norm_df[3:]
+                    if norm_df in table_norm_map:
+                        tbl_col = table_norm_map[norm_df]
+                        if tbl_col.startswith('[') and tbl_col.endswith(']'):
+                            columns.append(tbl_col)
+                        else:
+                            columns.append(f"[{tbl_col}]")
+                        matched_df_cols.append(df_col)
                 if not columns:
                     return False, 0, "No matching columns found"
 
@@ -208,7 +211,7 @@ class DatabaseManager:
 
                 # Convert DataFrame to list of tuples using only the matched columns
                 data = df[matched_df_cols].values.tolist()
-                
+
                 # Insert in batches
                 rows_inserted = 0
                 for i in range(0, len(data), batch_size):
@@ -216,12 +219,12 @@ class DatabaseManager:
                     cursor.executemany(insert_sql, batch)
                     rows_inserted += len(batch)
                     self.logger.info(f"Inserted batch of {len(batch)} rows")
-                
+
                 self.connection.commit()
                 message = f"Successfully inserted {rows_inserted} rows into {table_name}"
                 self.logger.info(message)
                 return True, rows_inserted, message
-                
+
         except Exception as e:
             error_msg = f"Failed to insert data: {str(e)}"
             self.logger.error(error_msg)
@@ -232,28 +235,29 @@ class DatabaseManager:
                 self.logger.error(f"Sample values (first row, first 3 cols): {sample_values}")
             self.connection.rollback()
             return False, 0, error_msg
-    
+
     def insert_with_tracking(
-        self,
-        df: pd.DataFrame,
-        table_name: str,
-        sender_email: str,
-        check_duplicates: bool = True
+            self,
+            df: pd.DataFrame,
+            table_name: str,
+            sender_email: str,
+            check_duplicates: bool = True
     ) -> Tuple[bool, int, str]:
         """
         Insert data with email tracking and duplicate checking.
-        
+
         Args:
             df: DataFrame to insert
             table_name: Target table name
             sender_email: Sender email address
             check_duplicates: Whether to check for existing data
-        
+
         Returns:
             Tuple of (success, rows_inserted, message)
         """
-        self.logger.info(f"Insert with tracking: table={table_name}, sender={sender_email}, check_dup={check_duplicates}")
-        
+        self.logger.info(
+            f"Insert with tracking: table={table_name}, sender={sender_email}, check_dup={check_duplicates}")
+
         if check_duplicates:
             is_dup = self.check_duplicate(table_name, sender_email)
             self.logger.info(f"Duplicate check result: {is_dup}")
@@ -261,45 +265,45 @@ class DatabaseManager:
                 msg = f"Data from email {sender_email} already exists. Skipping."
                 self.logger.info(msg)
                 return True, 0, msg
-        
+
         # Add tracking column if table has it
         table_columns = self.get_table_columns(table_name)
         self.logger.info(f"Table columns: {table_columns}")
-        
+
         if 'sender_email' in table_columns and sender_email:
             df = df.copy()
             df['sender_email'] = sender_email
-        
+
         return self.insert_dataframe(df, table_name, sender_email)
-    
+
     def insert_email_master(self, actual_email: str, created_by: str = "System") -> Tuple[bool, int, str]:
         """
         Insert email into Email_Master table if not exists.
-        
+
         Returns:
             Tuple of (success, email_master_a_id, message)
         """
         try:
             cursor = self.connection.cursor()
-            
+
             # Check if email already exists
             cursor.execute("SELECT Email_Master_A FROM Email_Master WHERE EmailID = ?", (actual_email,))
             existing = cursor.fetchone()
-            
+
             if existing:
                 email_master_a = existing[0]
                 self.logger.info(f"Email {actual_email} already exists in Email_Master with ID {email_master_a}")
                 return True, email_master_a, "Email already exists"
-            
+
             # Check if actual_email is valid
             if not actual_email:
                 self.logger.error("Email cannot be empty")
                 return False, 0, "Email cannot be empty"
-            
+
             # Insert new email using stored procedure
             self.logger.info(f"Inserting email: {actual_email}")
             cursor.execute("EXEC usp_insert_email @Email_ID = ?, @CreatedBy = ?", (actual_email, created_by))
-            
+
             # Get the inserted ID - try multiple methods
             try:
                 # Method 1: Try to get result from stored procedure
@@ -311,7 +315,7 @@ class DatabaseManager:
                     return True, email_master_a, "Email inserted successfully"
             except:
                 pass
-            
+
             # Method 2: Use SCOPE_IDENTITY() directly
             try:
                 cursor.execute("SELECT SCOPE_IDENTITY()")
@@ -319,11 +323,12 @@ class DatabaseManager:
                 if result and result[0] is not None:
                     email_master_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email {actual_email} into Email_Master with ID {email_master_a} (using SCOPE_IDENTITY)")
+                    self.logger.info(
+                        f"Inserted email {actual_email} into Email_Master with ID {email_master_a} (using SCOPE_IDENTITY)")
                     return True, email_master_a, "Email inserted successfully"
             except:
                 pass
-            
+
             # Method 3: Use IDENT_CURRENT as last resort
             try:
                 cursor.execute("SELECT IDENT_CURRENT('Email_Master')")
@@ -331,14 +336,15 @@ class DatabaseManager:
                 if result and result[0] is not None:
                     email_master_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email {actual_email} into Email_Master with ID {email_master_a} (using IDENT_CURRENT)")
+                    self.logger.info(
+                        f"Inserted email {actual_email} into Email_Master with ID {email_master_a} (using IDENT_CURRENT)")
                     return True, email_master_a, "Email inserted successfully"
             except:
                 pass
-            
+
             self.logger.error("Failed to get inserted ID from all methods")
             return False, 0, "Failed to get inserted ID"
-            
+
         except Exception as e:
             self.logger.error(f"Failed to insert into Email_Master: {str(e)}")
             # Try to rollback if possible
@@ -347,18 +353,18 @@ class DatabaseManager:
             except:
                 pass
             return False, 0, str(e)
-    
+
     def insert_email_details(self, email_master_a: int, subject: str, sheet_name: str,
-                           total_rows: int, received_date: datetime) -> Tuple[bool, int, str]:
+                             total_rows: int, received_date: datetime) -> Tuple[bool, int, str]:
         """
         Insert email details into Email_Details table.
-        
+
         Returns:
             Tuple of (success, email_received_details_a, message)
         """
         try:
             cursor = self.connection.cursor()
-            
+
             # Validate required parameters
             if not subject:
                 subject = "No Subject"
@@ -368,16 +374,16 @@ class DatabaseManager:
                 total_rows = 0
             if received_date is None:
                 received_date = datetime.now()
-            
+
             # Insert email details - try stored procedure first, then direct SQL
             self.logger.info(f"Inserting email details for Email_Master_A {email_master_a}")
-            
+
             try:
                 # Try stored procedure first
                 self.logger.info(f"Hi {email_master_a}")
                 cursor.execute(
-                   "EXEC usp_insert_Email_Received_Details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
-                   (email_master_a, subject, sheet_name, total_rows, received_date)
+                    "EXEC usp_insert_Email_Received_Details @EmailID_N = ?, @Subject_Name = ?, @SheetName = ?, @TotalRows = ?, @ReceivedDate = ?",
+                    (email_master_a, subject, sheet_name, total_rows, received_date)
                 )
 
                 self.logger.info(f"next {email_master_a}")
@@ -388,7 +394,7 @@ class DatabaseManager:
                     "INSERT INTO Email_Received_Details (EmailID_N, Subject_Name, SheetName, TotalRows, ReceivedDate) VALUES (?, ?, ?, ?, ?)",
                     (email_master_a, subject, sheet_name, total_rows, received_date)
                 )
-            
+
             # Get the inserted ID - try multiple methods
             try:
                 # Method 1: Try to get result from stored procedure
@@ -397,11 +403,12 @@ class DatabaseManager:
                 if result and result[0] is not None:
                     email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a}")
+                    self.logger.info(
+                        f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a}")
                     return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
-            
+
             # Method 2: Use SCOPE_IDENTITY() directly
             try:
                 cursor.execute("SELECT SCOPE_IDENTITY()")
@@ -409,11 +416,12 @@ class DatabaseManager:
                 if result and result[0] is not None:
                     email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using SCOPE_IDENTITY)")
+                    self.logger.info(
+                        f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using SCOPE_IDENTITY)")
                     return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
-            
+
             # Method 3: Use IDENT_CURRENT as last resort
             try:
                 cursor.execute("SELECT IDENT_CURRENT('Email_Received_Details')")
@@ -421,14 +429,15 @@ class DatabaseManager:
                 if result and result[0] is not None:
                     email_received_details_a = int(result[0])
                     self.connection.commit()
-                    self.logger.info(f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using IDENT_CURRENT)")
+                    self.logger.info(
+                        f"Inserted email details for Email_Master_A {email_master_a} with ID {email_received_details_a} (using IDENT_CURRENT)")
                     return True, email_received_details_a, "Email details inserted successfully"
             except:
                 pass
-            
+
             self.logger.error("Failed to get inserted ID from all methods")
             return False, 0, "Failed to get inserted ID"
-            
+
         except Exception as e:
             self.logger.error(f"Failed to insert into Email_Details: {str(e)}")
             # Try to rollback if possible
@@ -437,7 +446,7 @@ class DatabaseManager:
             except:
                 pass
             return False, 0, str(e)
-    
+
     def execute_query(self, sql: str, params: Optional[tuple] = None) -> List[tuple]:
         """Execute a custom SQL query."""
         try:
@@ -446,15 +455,16 @@ class DatabaseManager:
                 cursor.execute(sql, params)
             else:
                 cursor.execute(sql)
-            
+
             if cursor.description:
                 return cursor.fetchall()
             return []
         except Exception as e:
             self.logger.error(f"Query execution failed: {str(e)}")
             return []
-    
-    def update_email_received_details(self, email_received_details_a: int, upload_date: datetime, table_name: str) -> bool:
+
+    def update_email_received_details(self, email_received_details_a: int, upload_date: datetime,
+                                      table_name: str) -> bool:
         """Update Email_Received_Details with UploadDate and TableName for a given record."""
         try:
             with self.connection.cursor() as cursor:
@@ -463,7 +473,8 @@ class DatabaseManager:
                     (upload_date, table_name, email_received_details_a)
                 )
                 self.connection.commit()
-                self.logger.info(f"Updated Email_Received_Details A={email_received_details_a} with TableName={table_name}")
+                self.logger.info(
+                    f"Updated Email_Received_Details A={email_received_details_a} with TableName={table_name}")
                 return True
         except Exception as e:
             self.logger.error(f"Failed to update Email_Received_Details: {str(e)}")
@@ -484,7 +495,7 @@ class DatabaseManager:
                     WHERE COLUMN_NAME = 'email_id'
                 """)
                 tables = [row[0] for row in cursor.fetchall()]
-                
+
                 stats = {}
                 for table in tables:
                     cursor.execute(f"""
@@ -500,7 +511,7 @@ class DatabaseManager:
                         'unique_emails': row[1],
                         'last_processed': row[2]
                     }
-                
+
                 return stats
         except Exception as e:
             self.logger.error(f"Error getting stats: {str(e)}")

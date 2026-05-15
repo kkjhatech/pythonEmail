@@ -17,13 +17,13 @@ from utils import get_logger, ExcelValidator
 
 class EmailAutomation:
     """Main application class for email automation."""
-    
+
     def __init__(self):
         self.settings = Settings.from_env()
         self.logger = get_logger('EmailAutomation', self.settings.log_folder)
         self.scheduler = SchedulerService(self.settings.log_folder)
         self.excel_service = ExcelService(self.settings.log_folder)
-        
+
         # Statistics
         self.stats = {
             'emails_processed': 0,
@@ -31,15 +31,15 @@ class EmailAutomation:
             'rows_inserted': 0,
             'errors': 0
         }
-    
+
     def _get_email_service(self):
         """Get appropriate email service based on provider and connection method."""
         provider = self.settings.email_provider
-        
+
         if provider == 'gmail':
             self.logger.info("Using Gmail IMAP service")
             return EmailService(self.settings)
-        
+
         elif provider in ['outlook', 'office365']:
             if self.settings.outlook_connection_method == 'com':
                 self.logger.info("Using Outlook COM automation (requires Outlook desktop app)")
@@ -47,30 +47,30 @@ class EmailAutomation:
             else:
                 self.logger.info("Using Outlook IMAP service")
                 return EmailService(self.settings)
-        
+
         else:
             self.logger.info(f"Using default IMAP service for {provider}")
             return EmailService(self.settings)
-    
+
     def run(self):
         """Run the automation once."""
         self.logger.info("=" * 60)
         self.logger.info("Starting email automation cycle")
         self.logger.info("=" * 60)
-        
+
         try:
             with self._get_email_service() as email_service:
                 # Fetch unread emails
                 emails = email_service.fetch_unread_emails(
                     since_days=self.settings.date_filter_days
                 )
-                
+
                 if not emails:
                     self.logger.info("No matching emails found")
                     return
-                
+
                 self.logger.info(f"Processing {len(emails)} emails")
-                
+
                 # Process each email
                 for email_data in emails:
                     try:
@@ -78,72 +78,72 @@ class EmailAutomation:
                     except Exception as e:
                         self.logger.error(f"Error processing email: {str(e)}")
                         self.stats['errors'] += 1
-                
+
                 # Print summary
                 self._print_summary()
-                
+
         except Exception as e:
             self.logger.error(f"Automation cycle failed: {str(e)}")
             self.stats['errors'] += 1
-    
+
     def _process_email(
-        self,
-        email_service: EmailService,
-        email_data: Dict[str, Any]
+            self,
+            email_service: EmailService,
+            email_data: Dict[str, Any]
     ):
         """Process a single email."""
         email_id = email_data['id']
         sender = email_data.get('sender_email', 'unknown')
         subject = email_data.get('subject', 'no subject')
-        
+
         self.logger.info(f"Processing email from {sender}: {subject}")
-        
+
         # Debug: Show file extensions being checked
         self.logger.info(f"Checking for Excel files with extensions: {self.settings.file_extensions}")
-        
+
         # Debug: Show all attachments found
         attachments = email_data.get('attachments', [])
         self.logger.info(f"Found {len(attachments)} attachments in email")
         for i, attachment in enumerate(attachments):
-            self.logger.info(f"  Attachment {i+1}: {attachment.get('filename', 'Unknown')}")
-        
+            self.logger.info(f"  Attachment {i + 1}: {attachment.get('filename', 'Unknown')}")
+
         # Check for Excel attachments
         if not email_service.has_excel_attachments(email_data):
             self.logger.info("No Excel attachments found, skipping")
             self._post_process_email(email_service, email_data, processed=False)
             return
-        
+
         # Process attachments
         files_processed = 0
         for attachment in email_data.get('attachments', []):
             filename = attachment['filename'].lower()
-            
+
             # Check if it's an allowed file type
             if not any(filename.endswith(ext) for ext in self.settings.file_extensions):
                 continue
-            
+
             # Download file
             file_path = email_service.download_attachment(
                 attachment,
                 self.settings.download_folder
             )
-            
+
             if file_path:
                 self.stats['files_downloaded'] += 1
                 self._process_excel_file(file_path, email_data, sender)
                 files_processed += 1
-        
+
         # Post-process email
         if files_processed > 0:
             self.stats['emails_processed'] += 1
             self._post_process_email(email_service, email_data, processed=True)
         else:
             self._post_process_email(email_service, email_data, processed=False)
-    
+
     def _process_excel_file(self, file_path: str, email_data: Dict[str, Any], sender: str):
         """Process a downloaded Excel file."""
         self.logger.info(f"Processing Excel file: {file_path}")
-        
+
         try:
             # Read Excel file
             df = self.excel_service.read_excel(file_path)
@@ -151,18 +151,20 @@ class EmailAutomation:
                 self.logger.error(f"Failed to read Excel file: {file_path}")
                 self.stats['errors'] += 1
                 return
-            
+
             self.logger.info(f"Excel file read successfully: {len(df)} rows")
-            
+
             # Validate and prepare data
             is_valid, prepared_df, message = self.excel_service.validate_and_prepare(df, file_path)
+            if is_valid:
+                    self.logger.info(f"Sanitized columns before DB insert: {list(prepared_df.columns)}")
             if not is_valid:
                 self.logger.error(f"Data validation failed: {message}")
                 self.stats['errors'] += 1
                 return
-            
+
             self.logger.info(f"Data validation passed: {len(prepared_df)} rows prepared")
-            
+
             # Insert into database with new structure
             self.logger.info(f"Starting database insertion for file: {file_path}")
             with DatabaseManager(self.settings) as db:
@@ -175,53 +177,53 @@ class EmailAutomation:
                         sender_email = sender_str.split('<')[1].split('>')[0].lower()
                     else:
                         sender_email = sender_str.lower()
-                
+
                 self.logger.info(f"Attempting to insert sender email: {sender_email}")
                 success, email_master_a, msg = db.insert_email_master(sender_email, "System")
-                
+
                 if not success:
                     self.logger.error(f"Failed to insert into Email_Master: {msg}")
                     self.stats['errors'] += 1
                     return
-                
+
                 self.logger.info(f"Email_Master inserted successfully with ID: {email_master_a}")
-                
+
                 # Step 2: Insert into Email_Details table
                 subject = email_data.get('subject', '')
                 sheet_name = 'Sheet1'  # Default, could be enhanced to detect actual sheet name
                 total_rows = len(prepared_df)
                 received_date = email_data.get('date', datetime.now())
-                
+
                 self.logger.info(f"Inserting Email_Details - Subject: '{subject}', Rows: {total_rows}")
                 success, email_received_details_a, msg = db.insert_email_details(
                     email_master_a, subject, sheet_name, total_rows, received_date
                 )
-                
+
                 if not success:
                     self.logger.error(f"Failed to insert into Email_Details: {msg}")
                     self.stats['errors'] += 1
                     return
-                
+
                 self.logger.info(f"Email_Details inserted successfully with ID: {email_received_details_a}")
-                
+
                 # Step 3: Create data table with prefixed name
                 prefixed_table_name = f"PY_{email_master_a}_{email_received_details_a}_{self._generate_table_name(file_path)}"
-                
+
                 self.logger.info(f"Creating prefixed table: {prefixed_table_name}")
-                if not db.table_exists(prefixed_table_name):
-                    self.logger.info(f"Table {prefixed_table_name} doesn't exist, creating...")
-                    create_sql = self.excel_service.generate_create_table_sql(
-                        self._generate_table_name(file_path),
-                        prepared_df,
-                        email_master_a,
-                        email_received_details_a
-                    )
-                    self.logger.info(f"Executing CREATE TABLE SQL...")
-                    db.execute_query(create_sql)
-                    self.logger.info(f"Table {prefixed_table_name} created successfully")
-                else:
-                    self.logger.info(f"Table {prefixed_table_name} already exists")
-                
+                if db.table_exists(prefixed_table_name):
+                    self.logger.info(f"Table {prefixed_table_name} exists, dropping to recreate")
+                    db.execute_query(f"DROP TABLE {prefixed_table_name}")
+                self.logger.info(f"Creating table {prefixed_table_name}")
+                create_sql = self.excel_service.generate_create_table_sql(
+                    self._generate_table_name(file_path),
+                    prepared_df,
+                    email_master_a,
+                    email_received_details_a
+                )
+                self.logger.info(f"Executing CREATE TABLE SQL...")
+                db.execute_query(create_sql)
+                self.logger.info(f"Table {prefixed_table_name} created successfully")
+
                 # Step 4: Insert data into prefixed table
                 self.logger.info(f"Attempting to insert {len(prepared_df)} rows into {prefixed_table_name}")
                 success, rows, message = db.insert_dataframe(
@@ -230,7 +232,7 @@ class EmailAutomation:
                     sender,
                     email_received_details_a
                 )
-                
+
                 if success:
                     self.stats['rows_inserted'] += rows
                     self.logger.info(f"Successfully inserted {rows} rows into {prefixed_table_name}")
@@ -239,16 +241,16 @@ class EmailAutomation:
                 else:
                     self.logger.error(f"Data insertion failed: {message}")
                     self.stats['errors'] += 1
-            
+
         except Exception as e:
             self.logger.error(f"Error processing Excel file {file_path}: {str(e)}")
             self.stats['errors'] += 1
-    
+
     def _generate_table_name(self, file_path: str) -> str:
         """Generate a table name from file path."""
         path = Path(file_path)
         name = path.stem
-        
+
         # Sanitize the filename (including any timestamp suffix) for a SQL table name
         import re
         # Replace spaces/dashes with underscore
@@ -262,41 +264,41 @@ class EmailAutomation:
         # Sanitize for SQL
         name = name.replace(' ', '_').replace('-', '_')
         name = re.sub(r'[^a-zA-Z0-9_]', '', name)
-        
+
         # Remove leading digits
         if name and name[0].isdigit():
             name = 'tbl_' + name
-        
+
         # Ensure valid length
         if len(name) > 100:
             name = name[:100]
-        
+
         return name or 'imported_data'
-    
+
     def _post_process_email(
-        self,
-        email_service: EmailService,
-        email_data: Dict[str, Any],
-        processed: bool = True
+            self,
+            email_service: EmailService,
+            email_data: Dict[str, Any],
+            processed: bool = True
     ):
         """Handle post-processing of email (mark read or move folder)."""
         email_id = email_data['id']
-        
+
         try:
             # Try to move to processed folder first
             if self.settings.email_processed_folder:
                 if email_service.move_to_folder(
-                    email_data,
-                    self.settings.email_processed_folder
+                        email_data,
+                        self.settings.email_processed_folder
                 ):
                     return
-            
+
             # Fall back to marking as read
             email_service.mark_as_read(email_data)
-            
+
         except Exception as e:
             self.logger.warning(f"Post-processing failed for email {email_id}: {str(e)}")
-    
+
     def _print_summary(self):
         """Print processing summary."""
         self.logger.info("=" * 60)
@@ -307,22 +309,22 @@ class EmailAutomation:
         self.logger.info(f"Rows inserted: {self.stats['rows_inserted']}")
         self.logger.info(f"Errors: {self.stats['errors']}")
         self.logger.info("=" * 60)
-    
+
     def start_scheduler(self):
         """Start the scheduler for automatic execution."""
         self.logger.info(f"Starting scheduler (interval: {self.settings.check_interval_minutes} minutes)")
-        
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
+
         # Start scheduler
         self.scheduler.start(
             task=self.run,
             interval_minutes=self.settings.check_interval_minutes,
             run_immediately=True
         )
-        
+
         # Keep main thread alive
         try:
             while self.scheduler.is_running():
@@ -330,13 +332,13 @@ class EmailAutomation:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.stop_scheduler()
-    
+
     def stop_scheduler(self):
         """Stop the scheduler."""
         self.logger.info("Stopping scheduler...")
         self.scheduler.stop()
         self.logger.info("Scheduler stopped")
-    
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
         self.logger.info(f"Received signal {signum}, shutting down...")
@@ -347,7 +349,7 @@ class EmailAutomation:
 def main():
     """Main entry point."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Email Automation System')
     parser.add_argument(
         '--run-once',
@@ -364,11 +366,11 @@ def main():
         action='store_true',
         help='Test email connection and exit'
     )
-    
+
     args = parser.parse_args()
-    
+
     settings = Settings.from_env()
-    
+
     # Test database connection
     if args.test_db:
         logger = get_logger('Main', settings.log_folder)
@@ -380,7 +382,7 @@ def main():
             else:
                 logger.error("Database connection failed!")
                 return 1
-    
+
     # Test email connection
     if args.test_email:
         logger = get_logger('Main', settings.log_folder)
@@ -392,15 +394,15 @@ def main():
             else:
                 logger.error("Email connection failed!")
                 return 1
-    
+
     # Run automation
     automation = EmailAutomation()
-    
+
     if args.run_once:
         automation.run()
     else:
         automation.start_scheduler()
-    
+
     return 0
 
 

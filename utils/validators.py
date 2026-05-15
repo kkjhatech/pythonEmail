@@ -89,31 +89,51 @@ class ExcelValidator:
     def sanitize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Sanitize column names for SQL compatibility.
-        
+
         Args:
             df: DataFrame with original column names
-        
+
         Returns:
             DataFrame with sanitized column names
         """
+        import re
+        from datetime import datetime
         df = df.copy()
-        
+
         new_columns = []
         for col in df.columns:
-            # Remove special characters, replace spaces with underscores
-            clean_col = str(col).strip()
+            # Handle datetime-like column names (e.g., pandas Timestamp) or Excel serial dates (numeric)
+            if isinstance(col, (datetime, pd.Timestamp)):
+                # Format as DD-MMM-YYYY
+                clean_col = col.strftime("%d-%b-%Y")
+            elif isinstance(col, (int, float)):
+                # Treat as Excel serial date (days since 1899-12-30)
+                try:
+                    base_date = datetime(1899, 12, 30)
+                    clean_col = (base_date + pd.Timedelta(days=int(col))).strftime("%d-%b-%Y")
+                except Exception:
+                    clean_col = str(col)
+            else:
+                clean_col = str(col).strip()
+                # Expand two‑digit year dates like "01-May-26" to "01-May-2026"
+                try:
+                    if re.match(r"^\d{2}-[A-Za-z]{3}-\d{2}$", clean_col):
+                        dt = datetime.strptime(clean_col, "%d-%b-%y")
+                        clean_col = dt.strftime("%d-%b-%Y")
+                except Exception:
+                    pass
+            # Determine if this column is a date header (e.g., 01-May-2026 or 01_May_2026)
+            is_date_header = bool(re.match(r"^\d{2}[-_]\w{3}[-_]\d{4}$", clean_col))
+            # Replace spaces with underscores; preserve hyphens for date headers
             clean_col = clean_col.replace(' ', '_')
-            clean_col = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_col)
-            
-            # Remove trailing underscores (from trailing spaces/special chars)
+            if not is_date_header:
+                # For non‑date columns, replace any non‑alphanumeric/underscore characters (including hyphens) with underscore
+                clean_col = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_col)
+            # Remove trailing underscores
             clean_col = clean_col.rstrip('_')
-            
-            # Ensure starts with letter or underscore
-            if clean_col[0].isdigit():
-                clean_col = f"col_{clean_col}"
-            
+            # Do not prefix with "col_" for date headers or any column containing letters
             new_columns.append(clean_col)
-        
+
         df.columns = new_columns
         return df
     
